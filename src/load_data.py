@@ -1,23 +1,16 @@
 import pandas as pd
 
 def _read_csv_robust(path: str) -> pd.DataFrame:
-    """
-    Boston files can be:
-      - comma-delimited OR tab-delimited
-      - encoded as utf-8 OR cp1252/latin1
-    This tries combinations until it gets >1 column.
-    """
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
     seps = [",", "\t"]
-
     last_err = None
+
     for enc in encodings:
         for sep in seps:
             try:
                 df = pd.read_csv(path, encoding=enc, sep=sep)
                 if df.shape[1] <= 1:
-                    continue  # wrong delimiter most likely
-                # clean column names
+                    continue
                 df.columns = [str(c).strip().replace("\ufeff", "") for c in df.columns]
                 return df
             except Exception as e:
@@ -26,15 +19,10 @@ def _read_csv_robust(path: str) -> pd.DataFrame:
     raise RuntimeError(f"Could not read {path}. Last error: {last_err}")
 
 def _find_col(df: pd.DataFrame, wanted: str) -> str:
-    """
-    Find a column ignoring case and spaces.
-    Example: wanted='OCCURRED_ON_DATE'
-    """
     w = wanted.strip().lower()
     for c in df.columns:
         if str(c).strip().lower() == w:
             return c
-    # fallback: partial match
     for c in df.columns:
         if w in str(c).strip().lower():
             return c
@@ -48,11 +36,20 @@ def load_boston_burglary(crime_path: str, offense_codes_path: str | None = None)
     lon_col = _find_col(crime, "Long")
 
     crime["dt"] = pd.to_datetime(crime[date_col], errors="coerce")
+
+    # convert coords to numeric + drop bad
+    crime[lat_col] = pd.to_numeric(crime[lat_col], errors="coerce")
+    crime[lon_col] = pd.to_numeric(crime[lon_col], errors="coerce")
     crime = crime.dropna(subset=["dt", lat_col, lon_col]).copy()
 
     crime = crime.rename(columns={lat_col: "lat", lon_col: "lon"})
 
-    # Optional: join offense code names
+    crime = crime[
+        crime["lat"].between(42.0, 42.6) &
+        crime["lon"].between(-71.3, -70.8)
+    ].copy()
+
+    # optional join
     if offense_codes_path:
         codes = _read_csv_robust(offense_codes_path)
         code_col = _find_col(codes, "CODE")
@@ -61,16 +58,12 @@ def load_boston_burglary(crime_path: str, offense_codes_path: str | None = None)
         if "OFFENSE_CODE" in crime.columns:
             crime = crime.merge(codes[["OFFENSE_CODE", "OFFENSE_NAME"]], on="OFFENSE_CODE", how="left")
 
-    # Burglary filter: use group/description if available
-    group_col = None
-    desc_col = None
-    if any(str(c).strip().lower() == "offense_code_group" for c in crime.columns):
-        group_col = _find_col(crime, "OFFENSE_CODE_GROUP")
-    if any(str(c).strip().lower() == "offense_description" for c in crime.columns):
-        desc_col = _find_col(crime, "OFFENSE_DESCRIPTION")
+    # burglary filter
+    group_col = "OFFENSE_CODE_GROUP" if "OFFENSE_CODE_GROUP" in crime.columns else None
+    desc_col = "OFFENSE_DESCRIPTION" if "OFFENSE_DESCRIPTION" in crime.columns else None
 
     if group_col is None and desc_col is None:
-        raise KeyError("Need OFFENSE_CODE_GROUP or OFFENSE_DESCRIPTION in crime.csv to filter burglary.")
+        raise KeyError("Need OFFENSE_CODE_GROUP or OFFENSE_DESCRIPTION to filter burglary.")
 
     group = crime[group_col].astype(str) if group_col else ""
     desc = crime[desc_col].astype(str) if desc_col else ""
@@ -81,7 +74,7 @@ def load_boston_burglary(crime_path: str, offense_codes_path: str | None = None)
     crime = crime[mask].copy()
 
     keep = ["dt", "lat", "lon"]
-    for c in ["OFFENSE_CODE", group_col, desc_col, "OFFENSE_NAME", "INCIDENT_NUMBER"]:
+    for c in ["INCIDENT_NUMBER", "OFFENSE_CODE", group_col, desc_col, "OFFENSE_NAME"]:
         if c and c in crime.columns and c not in keep:
             keep.append(c)
 
