@@ -2,14 +2,13 @@ import pandas as pd
 
 def read_any(path: str):
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
-    seps = ["\t", ","]  # your files look tab-separated
+    seps = ["\t", ","]
 
     last_err = None
     for enc in encodings:
         for sep in seps:
             try:
                 df = pd.read_csv(path, encoding=enc, sep=sep)
-                # If parsing failed silently, you often get 1 giant column
                 if df.shape[1] <= 1:
                     continue
                 return df, enc, sep
